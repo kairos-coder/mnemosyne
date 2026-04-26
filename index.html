@@ -24,7 +24,9 @@
         .stat-number { font-size: 1.5rem; font-weight: bold; color: #8a6a4a; }
         .stat-label { font-size: 0.65rem; color: #6a7a8a; }
         
-        .queue-item { background: #0f141e; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+        .queue-item { background: #0f141e; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; cursor: pointer; transition: all 0.2s; }
+        .queue-item:hover { border-color: #8a6a4a; }
+        .queue-item.selected { border-color: #8a6a4a; background: #1a1f2a; }
         .queue-text { font-size: 0.85rem; line-height: 1.3; }
         .queue-meta { font-size: 0.65rem; color: #8a6a4a; margin: 0.5rem 0; display: flex; gap: 1rem; flex-wrap: wrap; }
         .selected-sources { background: #1a1f2a; border-radius: 0.5rem; padding: 0.75rem; margin: 0.5rem 0; font-size: 0.7rem; }
@@ -99,37 +101,13 @@
         let supabase = null;
         
         let queueItems = [];
-        let selectedIds = new Set();
-        let selectedBodies = [];
+        let selectedIds = [];
+        let selectedItems = [];
         let confidence = 3;
         
         // ============================================
         // DATABASE FUNCTIONS
         // ============================================
-        async function createTables() {
-            await supabase.query(`
-                CREATE TABLE IF NOT EXISTS mnemosyne_queue (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    construct_id UUID,
-                    body TEXT,
-                    demeter_score INTEGER,
-                    intent FLOAT,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                );
-                
-                CREATE TABLE IF NOT EXISTS human_synthesis (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    body TEXT NOT NULL,
-                    source_ids UUID[],
-                    source_bodies TEXT[],
-                    word_count INTEGER,
-                    confidence INTEGER,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                );
-            `);
-        }
-        
         async function loadQueue() {
             const { data, error } = await supabase
                 .from('mnemosyne_queue')
@@ -137,7 +115,14 @@
                 .eq('status', 'pending')
                 .order('created_at', { ascending: false });
             
-            if (error) { addLog(`Error loading queue: ${error.message}`, 'error'); return []; }
+            if (error) { 
+                if (error.message.includes('does not exist')) {
+                    addLog('mnemosyne_queue table not yet created. Apollo will create it when sending PROMOTE items.', 'warning');
+                } else {
+                    addLog(`Error loading queue: ${error.message}`, 'error');
+                }
+                return [];
+            }
             queueItems = data || [];
             renderQueue();
             updateStats();
@@ -153,21 +138,26 @@
                 return;
             }
             
-            if (selectedIds.size === 0) {
+            if (selectedIds.length === 0) {
                 addLog('Please select at least one source construct', 'error');
                 return;
             }
             
-            const sourceIds = Array.from(selectedIds);
-            const sourceBodies = selectedBodies;
+            const sourceIds = selectedIds;
+            const sourceBodies = selectedItems.map(i => i.body);
+            const sourceScores = selectedItems.map(i => i.demeter_score);
             
-            const { error } = await supabase.from('human_synthesis').insert({
+            const synthesisData = {
                 body: synthesis.toLowerCase(),
                 source_ids: sourceIds,
                 source_bodies: sourceBodies,
+                source_scores: sourceScores,
                 word_count: wordCount,
-                confidence: confidence
-            });
+                confidence: confidence,
+                created_at: new Date().toISOString()
+            };
+            
+            const { error } = await supabase.from('human_synthesis').insert(synthesisData);
             
             if (error) {
                 addLog(`Save failed: ${error.message}`, 'error');
@@ -175,7 +165,7 @@
             }
             
             // Mark used queue items as completed
-            for (const id of sourceIds) {
+            for (const id of selectedIds) {
                 await supabase
                     .from('mnemosyne_queue')
                     .update({ status: 'completed' })
@@ -202,10 +192,9 @@
             }
             
             container.innerHTML = queueItems.map(item => {
-                const isSelected = selectedIds.has(item.construct_id);
-                const selectedClass = isSelected ? 'selected-sources' : '';
+                const isSelected = selectedIds.includes(item.construct_id);
                 return `
-                    <div class="queue-item" onclick="toggleSelect('${item.construct_id}', \`${escapeHtml(item.body)}\`, ${item.demeter_score})" style="cursor:pointer; ${isSelected ? 'border-color:#8a6a4a' : ''}">
+                    <div class="queue-item ${isSelected ? 'selected' : ''}" onclick="toggleSelect('${item.construct_id}')">
                         <div class="queue-text">${escapeHtml(item.body)}</div>
                         <div class="queue-meta">
                             <span>🎯 Demeter: ${item.demeter_score}%</span>
@@ -218,14 +207,17 @@
             }).join('');
         }
         
-        window.toggleSelect = (id, body, score) => {
-            if (selectedIds.has(id)) {
-                selectedIds.delete(id);
-                const idx = selectedBodies.findIndex(b => b.includes(id));
-                if (idx !== -1) selectedBodies.splice(idx, 1);
+        window.toggleSelect = (id) => {
+            const item = queueItems.find(i => i.construct_id === id);
+            if (!item) return;
+            
+            const index = selectedIds.indexOf(id);
+            if (index === -1) {
+                selectedIds.push(id);
+                selectedItems.push(item);
             } else {
-                selectedIds.add(id);
-                selectedBodies.push(`[${score}%] ${body.substring(0, 100)}`);
+                selectedIds.splice(index, 1);
+                selectedItems.splice(index, 1);
             }
             updateSelectedDisplay();
             renderQueue();
@@ -233,19 +225,19 @@
         
         function updateSelectedDisplay() {
             const container = document.getElementById('selectedInfo');
-            if (selectedIds.size === 0) {
+            if (selectedIds.length === 0) {
                 container.innerHTML = 'No sources selected. Click a construct above to add.';
                 return;
             }
             container.innerHTML = `
-                <strong>📚 Selected Sources (${selectedIds.size}):</strong><br>
-                ${selectedBodies.map(b => `• ${b.substring(0, 80)}...`).join('<br>')}
+                <strong>📚 Selected Sources (${selectedIds.length}):</strong><br>
+                ${selectedItems.map(i => `• [${i.demeter_score}%] ${escapeHtml(i.body.substring(0, 80))}...`).join('<br>')}
             `;
         }
         
         function clearSelection() {
-            selectedIds.clear();
-            selectedBodies = [];
+            selectedIds = [];
+            selectedItems = [];
             updateSelectedDisplay();
             renderQueue();
         }
@@ -279,7 +271,7 @@
             document.getElementById('statsGrid').innerHTML = `
                 <div class="stat-card"><div class="stat-number">${pending?.length || 0}</div><div class="stat-label">Pending Synthesis</div></div>
                 <div class="stat-card"><div class="stat-number">${completed?.length || 0}</div><div class="stat-label">Completed Syntheses</div></div>
-                <div class="stat-card"><div class="stat-number">${selectedIds.size}</div><div class="stat-label">Selected Sources</div></div>
+                <div class="stat-card"><div class="stat-number">${selectedIds.length}</div><div class="stat-label">Selected Sources</div></div>
             `;
         }
         
@@ -299,7 +291,6 @@
         async function init() {
             if (!window.supabase) { addLog('Supabase failed to load', 'error'); return; }
             supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-            await createTables();
             await loadQueue();
             await updateStats();
             
