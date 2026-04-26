@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🧠 Mnemosyne · Human Synthesis Layer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0c12; font-family: 'Courier New', monospace; padding: 2rem; color: #d4e0ed; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { border-left: 4px solid #8a6a4a; padding-left: 1rem; margin-bottom: 2rem; }
+        h1 { font-size: 2rem; color: #8a6a4a; }
+        .sub { color: #6a7a8a; font-size: 0.8rem; }
+        
+        .panel { background: #0b0e16; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .panel-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 2px; color: #6a7a8a; margin-bottom: 1rem; }
+        
+        button { background: #1e2535; border: none; color: #d4e0ed; padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; margin-right: 0.5rem; font-family: monospace; transition: all 0.2s; }
+        button:hover { background: #8a6a4a; color: #0a0c12; }
+        button.primary { background: #8a6a4a; color: #0a0c12; }
+        
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+        .stat-card { background: #0f141e; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 0.75rem; text-align: center; }
+        .stat-number { font-size: 1.5rem; font-weight: bold; color: #8a6a4a; }
+        .stat-label { font-size: 0.65rem; color: #6a7a8a; }
+        
+        .queue-item { background: #0f141e; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+        .queue-text { font-size: 0.85rem; line-height: 1.3; }
+        .queue-meta { font-size: 0.65rem; color: #8a6a4a; margin: 0.5rem 0; display: flex; gap: 1rem; flex-wrap: wrap; }
+        .selected-sources { background: #1a1f2a; border-radius: 0.5rem; padding: 0.75rem; margin: 0.5rem 0; font-size: 0.7rem; }
+        
+        textarea { width: 100%; background: #060810; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 1rem; color: #d4e0ed; font-family: monospace; font-size: 0.9rem; resize: vertical; }
+        textarea:focus { outline: none; border-color: #8a6a4a; }
+        
+        .word-count { font-size: 0.7rem; margin-top: 0.5rem; text-align: right; }
+        .word-count.valid { color: #6b8e23; }
+        .word-count.invalid { color: #cd5c5c; }
+        
+        .log-area { background: #060810; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 1rem; max-height: 200px; overflow-y: auto; font-size: 0.7rem; }
+        .log-entry { padding: 0.2rem 0; border-bottom: 1px solid #1a1f2a; color: #6a7a8a; }
+        .log-entry.success { color: #6b8e23; }
+        
+        .rating { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+        .star { font-size: 1.2rem; cursor: pointer; color: #3a3a4a; transition: all 0.1s; }
+        .star.active { color: #d4af37; }
+        .star:hover { color: #d4af37; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🧠 MNEMOSYNE · HUMAN SYNTHESIS LAYER</h1>
+        <div class="sub">Meaning Compression Only | No Routing | No Scoring | No AI</div>
+        <div class="sub">Select sources → Write 16-32 word synthesis → Save to human_synthesis</div>
+    </div>
+
+    <div class="stats-grid" id="statsGrid"></div>
+
+    <div class="panel">
+        <div class="panel-title">📥 SYNTHESIS QUEUE (from Apollo PROMOTE)</div>
+        <div id="queueContainer">
+            <div class="log-entry">Loading synthesis queue...</div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-title">✍️ SYNTHESIS WORKSPACE</div>
+        <div id="selectedInfo" class="selected-sources">No sources selected. Click a construct above to add.</div>
+        <textarea id="synthesisInput" rows="4" placeholder="Write a 16-32 word synthesis that collapses the meaning of selected constructs..."></textarea>
+        <div class="word-count" id="wordCount">0 / 16-32 words</div>
+        
+        <div class="rating">
+            <span style="font-size:0.7rem;">Confidence:</span>
+            <span class="star" data-rating="1">★</span>
+            <span class="star" data-rating="2">★</span>
+            <span class="star" data-rating="3">★</span>
+            <span class="star" data-rating="4">★</span>
+            <span class="star" data-rating="5">★</span>
+            <span style="font-size:0.6rem; margin-left:0.5rem;">(How confident are you in this synthesis?)</span>
+        </div>
+        
+        <button id="submitBtn" class="primary" style="margin-top: 1rem;">💾 Save to human_synthesis</button>
+        <button id="clearBtn">Clear</button>
+    </div>
+
+    <div class="panel">
+        <div class="panel-title">📜 SYNTHESIS LOG</div>
+        <div id="ingestLog" class="log-area">
+            <div class="log-entry">🧠 Mnemosyne ready. Select constructs, write synthesis (16-32 words), save.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function() {
+        const SUPABASE_URL = 'https://kzcucjcyxybypncbdbws.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_saeUHGocDah-T2_709M6Fg_g26JtLXw';
+        let supabase = null;
+        
+        let queueItems = [];
+        let selectedIds = new Set();
+        let selectedBodies = [];
+        let confidence = 3;
+        
+        // ============================================
+        // DATABASE FUNCTIONS
+        // ============================================
+        async function createTables() {
+            await supabase.query(`
+                CREATE TABLE IF NOT EXISTS mnemosyne_queue (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    construct_id UUID,
+                    body TEXT,
+                    demeter_score INTEGER,
+                    intent FLOAT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                
+                CREATE TABLE IF NOT EXISTS human_synthesis (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    body TEXT NOT NULL,
+                    source_ids UUID[],
+                    source_bodies TEXT[],
+                    word_count INTEGER,
+                    confidence INTEGER,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            `);
+        }
+        
+        async function loadQueue() {
+            const { data, error } = await supabase
+                .from('mnemosyne_queue')
+                .select('*')
+                .eq('status', 'pending')
+                .order('created_at', { ascending: false });
+            
+            if (error) { addLog(`Error loading queue: ${error.message}`, 'error'); return []; }
+            queueItems = data || [];
+            renderQueue();
+            updateStats();
+            return queueItems;
+        }
+        
+        async function saveSynthesis() {
+            const synthesis = document.getElementById('synthesisInput').value.trim();
+            const wordCount = synthesis.split(/\s+/).filter(w => w.length > 0).length;
+            
+            if (wordCount < 16 || wordCount > 32) {
+                addLog(`Synthesis must be 16-32 words (currently ${wordCount})`, 'error');
+                return;
+            }
+            
+            if (selectedIds.size === 0) {
+                addLog('Please select at least one source construct', 'error');
+                return;
+            }
+            
+            const sourceIds = Array.from(selectedIds);
+            const sourceBodies = selectedBodies;
+            
+            const { error } = await supabase.from('human_synthesis').insert({
+                body: synthesis.toLowerCase(),
+                source_ids: sourceIds,
+                source_bodies: sourceBodies,
+                word_count: wordCount,
+                confidence: confidence
+            });
+            
+            if (error) {
+                addLog(`Save failed: ${error.message}`, 'error');
+                return;
+            }
+            
+            // Mark used queue items as completed
+            for (const id of sourceIds) {
+                await supabase
+                    .from('mnemosyne_queue')
+                    .update({ status: 'completed' })
+                    .eq('construct_id', id);
+            }
+            
+            addLog(`✅ Synthesis saved! ${wordCount} words, confidence ${confidence}/5`, 'success');
+            
+            // Clear workspace
+            document.getElementById('synthesisInput').value = '';
+            updateWordCount();
+            clearSelection();
+            await loadQueue();
+        }
+        
+        // ============================================
+        // UI FUNCTIONS
+        // ============================================
+        function renderQueue() {
+            const container = document.getElementById('queueContainer');
+            if (!queueItems.length) {
+                container.innerHTML = '<div class="log-entry">No pending synthesis items. Apollo will send PROMOTE constructs here.</div>';
+                return;
+            }
+            
+            container.innerHTML = queueItems.map(item => {
+                const isSelected = selectedIds.has(item.construct_id);
+                const selectedClass = isSelected ? 'selected-sources' : '';
+                return `
+                    <div class="queue-item" onclick="toggleSelect('${item.construct_id}', \`${escapeHtml(item.body)}\`, ${item.demeter_score})" style="cursor:pointer; ${isSelected ? 'border-color:#8a6a4a' : ''}">
+                        <div class="queue-text">${escapeHtml(item.body)}</div>
+                        <div class="queue-meta">
+                            <span>🎯 Demeter: ${item.demeter_score}%</span>
+                            <span>🎯 Intent: ${(item.intent * 100).toFixed(0)}%</span>
+                            <span>📅 ${new Date(item.created_at).toLocaleDateString()}</span>
+                            ${isSelected ? '<span>✅ Selected</span>' : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        window.toggleSelect = (id, body, score) => {
+            if (selectedIds.has(id)) {
+                selectedIds.delete(id);
+                const idx = selectedBodies.findIndex(b => b.includes(id));
+                if (idx !== -1) selectedBodies.splice(idx, 1);
+            } else {
+                selectedIds.add(id);
+                selectedBodies.push(`[${score}%] ${body.substring(0, 100)}`);
+            }
+            updateSelectedDisplay();
+            renderQueue();
+        };
+        
+        function updateSelectedDisplay() {
+            const container = document.getElementById('selectedInfo');
+            if (selectedIds.size === 0) {
+                container.innerHTML = 'No sources selected. Click a construct above to add.';
+                return;
+            }
+            container.innerHTML = `
+                <strong>📚 Selected Sources (${selectedIds.size}):</strong><br>
+                ${selectedBodies.map(b => `• ${b.substring(0, 80)}...`).join('<br>')}
+            `;
+        }
+        
+        function clearSelection() {
+            selectedIds.clear();
+            selectedBodies = [];
+            updateSelectedDisplay();
+            renderQueue();
+        }
+        
+        function updateWordCount() {
+            const input = document.getElementById('synthesisInput').value;
+            const wordCount = input.trim().split(/\s+/).filter(w => w.length > 0).length;
+            const elem = document.getElementById('wordCount');
+            elem.textContent = `${wordCount} / 16-32 words`;
+            elem.className = (wordCount >= 16 && wordCount <= 32) ? 'word-count valid' : 'word-count invalid';
+        }
+        
+        function initRatingStars() {
+            const stars = document.querySelectorAll('.star');
+            stars.forEach(star => {
+                star.addEventListener('click', () => {
+                    const rating = parseInt(star.dataset.rating);
+                    confidence = rating;
+                    stars.forEach((s, i) => {
+                        if (i < rating) s.classList.add('active');
+                        else s.classList.remove('active');
+                    });
+                });
+            });
+        }
+        
+        async function updateStats() {
+            const { data: pending } = await supabase.from('mnemosyne_queue').select('id', { count: 'exact' }).eq('status', 'pending');
+            const { data: completed } = await supabase.from('human_synthesis').select('id', { count: 'exact' });
+            
+            document.getElementById('statsGrid').innerHTML = `
+                <div class="stat-card"><div class="stat-number">${pending?.length || 0}</div><div class="stat-label">Pending Synthesis</div></div>
+                <div class="stat-card"><div class="stat-number">${completed?.length || 0}</div><div class="stat-label">Completed Syntheses</div></div>
+                <div class="stat-card"><div class="stat-number">${selectedIds.size}</div><div class="stat-label">Selected Sources</div></div>
+            `;
+        }
+        
+        function addLog(msg, type = 'info') {
+            const log = document.getElementById('ingestLog');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            log.appendChild(entry);
+            entry.scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        function escapeHtml(str) {
+            return String(str).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+        }
+        
+        async function init() {
+            if (!window.supabase) { addLog('Supabase failed to load', 'error'); return; }
+            supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            await createTables();
+            await loadQueue();
+            await updateStats();
+            
+            document.getElementById('submitBtn').onclick = saveSynthesis;
+            document.getElementById('clearBtn').onclick = () => {
+                document.getElementById('synthesisInput').value = '';
+                updateWordCount();
+                clearSelection();
+            };
+            document.getElementById('synthesisInput').oninput = updateWordCount;
+            initRatingStars();
+            
+            addLog('🧠 Mnemosyne ready. Select sources, write 16-32 word synthesis, save.');
+        }
+        
+        init();
+    })();
+</script>
+</body>
+</html>
