@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🧠 Mnemosyne · Human Synthesis Layer</title>
+    <title>🧠 Mnemosyne · Human Synthesis + Rejection</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #0a0c12; font-family: 'Courier New', monospace; padding: 2rem; color: #d4e0ed; }
@@ -18,8 +18,10 @@
         button { background: #1e2535; border: none; color: #d4e0ed; padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; margin-right: 0.5rem; font-family: monospace; transition: all 0.2s; }
         button:hover { background: #8a6a4a; color: #0a0c12; }
         button.primary { background: #8a6a4a; color: #0a0c12; }
+        button.reject { background: #5a2a2a; }
+        button.reject:hover { background: #8b3a3a; color: #fff; }
         
-        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
         .stat-card { background: #0f141e; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 0.75rem; text-align: center; }
         .stat-number { font-size: 1.5rem; font-weight: bold; color: #8a6a4a; }
         .stat-label { font-size: 0.65rem; color: #6a7a8a; }
@@ -41,20 +43,24 @@
         .log-area { background: #060810; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 1rem; max-height: 200px; overflow-y: auto; font-size: 0.7rem; }
         .log-entry { padding: 0.2rem 0; border-bottom: 1px solid #1a1f2a; color: #6a7a8a; }
         .log-entry.success { color: #6b8e23; }
+        .log-entry.reject { color: #cd5c5c; }
         
         .rating { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
         .star { font-size: 1.2rem; cursor: pointer; color: #3a3a4a; transition: all 0.1s; }
         .star.active { color: #d4af37; }
         .star:hover { color: #d4af37; }
+        
+        .action-bar { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+        .rejection-reason { margin-top: 0.5rem; display: none; }
+        .rejection-reason input { background: #060810; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 0.5rem; color: #d4e0ed; width: 100%; margin-top: 0.5rem; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        <h1>🧠 MNEMOSYNE · HUMAN SYNTHESIS LAYER</h1>
-        <div class="sub">Meaning Compression Only | No Routing | No Scoring | No AI</div>
-        <div class="sub">Select sources → Write 16-32 word synthesis → Save to human_synthesis</div>
+        <h1>🧠 MNEMOSYNE · HUMAN SYNTHESIS + REJECTION</h1>
+        <div class="sub">Accept → Collapse meaning into 16-32 words | Reject → Send back to Hephaestus for recombination</div>
     </div>
 
     <div class="stats-grid" id="statsGrid"></div>
@@ -82,14 +88,21 @@
             <span style="font-size:0.6rem; margin-left:0.5rem;">(How confident are you in this synthesis?)</span>
         </div>
         
-        <button id="submitBtn" class="primary" style="margin-top: 1rem;">💾 Save to human_synthesis</button>
-        <button id="clearBtn">Clear</button>
+        <div class="action-bar">
+            <button id="submitBtn" class="primary">✅ Accept & Save to human_synthesis</button>
+            <button id="rejectSelectedBtn" class="reject">❌ Reject Selected & Send to Hephaestus</button>
+            <button id="clearBtn">Clear</button>
+        </div>
+        
+        <div id="rejectionReasonArea" class="rejection-reason">
+            <input type="text" id="rejectionReason" placeholder="Optional rejection reason (e.g., 'too vague', 'incoherent', 'low tension')">
+        </div>
     </div>
 
     <div class="panel">
         <div class="panel-title">📜 SYNTHESIS LOG</div>
         <div id="ingestLog" class="log-area">
-            <div class="log-entry">🧠 Mnemosyne ready. Select constructs, write synthesis (16-32 words), save.</div>
+            <div class="log-entry">🧠 Mnemosyne ready. Accept constructs → synthesize. Reject → back to Hephaestus.</div>
         </div>
     </div>
 </div>
@@ -104,6 +117,7 @@
         let selectedIds = [];
         let selectedItems = [];
         let confidence = 3;
+        let showRejectionReason = false;
         
         // ============================================
         // DATABASE FUNCTIONS
@@ -172,11 +186,58 @@
                     .eq('construct_id', id);
             }
             
-            addLog(`✅ Synthesis saved! ${wordCount} words, confidence ${confidence}/5`, 'success');
+            addLog(`✅ Synthesis accepted! ${wordCount} words, confidence ${confidence}/5`, 'success');
             
             // Clear workspace
             document.getElementById('synthesisInput').value = '';
             updateWordCount();
+            clearSelection();
+            await loadQueue();
+        }
+        
+        async function rejectSelected() {
+            if (selectedIds.length === 0) {
+                addLog('Please select at least one construct to reject', 'error');
+                return;
+            }
+            
+            const reason = document.getElementById('rejectionReason').value.trim() || 'No reason provided';
+            
+            for (const item of selectedItems) {
+                // Add to rejection queue
+                const rejectData = {
+                    construct_id: item.construct_id,
+                    original_body: item.body,
+                    demeter_score: item.demeter_score,
+                    rejection_reason: reason,
+                    rejected_by: 'human',
+                    created_at: new Date().toISOString()
+                };
+                
+                await supabase.from('rejection_queue').insert(rejectData);
+                
+                // Mark as rejected in mnemosyne_queue
+                await supabase
+                    .from('mnemosyne_queue')
+                    .update({ status: 'rejected' })
+                    .eq('construct_id', item.construct_id);
+                
+                // Optional: Also mark in concepts for tracking
+                await supabase
+                    .from('concepts')
+                    .update({ 
+                        metadata: supabase.raw(`jsonb_set(metadata, '{human_rejected}', 'true')`),
+                        score: Math.max(0, (item.demeter_score || 50) - 15)  // Penalize score
+                    })
+                    .eq('id', item.construct_id);
+            }
+            
+            addLog(`❌ Rejected ${selectedIds.length} construct(s). Reason: "${reason}" — sent back to Hephaestus pool.`, 'reject');
+            
+            // Clear rejection reason field
+            document.getElementById('rejectionReason').value = '';
+            
+            // Clear workspace
             clearSelection();
             await loadQueue();
         }
@@ -240,6 +301,7 @@
             selectedItems = [];
             updateSelectedDisplay();
             renderQueue();
+            document.getElementById('rejectionReasonArea').style.display = 'none';
         }
         
         function updateWordCount() {
@@ -267,10 +329,12 @@
         async function updateStats() {
             const { data: pending } = await supabase.from('mnemosyne_queue').select('id', { count: 'exact' }).eq('status', 'pending');
             const { data: completed } = await supabase.from('human_synthesis').select('id', { count: 'exact' });
+            const { data: rejected } = await supabase.from('rejection_queue').select('id', { count: 'exact' });
             
             document.getElementById('statsGrid').innerHTML = `
                 <div class="stat-card"><div class="stat-number">${pending?.length || 0}</div><div class="stat-label">Pending Synthesis</div></div>
-                <div class="stat-card"><div class="stat-number">${completed?.length || 0}</div><div class="stat-label">Completed Syntheses</div></div>
+                <div class="stat-card"><div class="stat-number">${completed?.length || 0}</div><div class="stat-label">Accepted Syntheses</div></div>
+                <div class="stat-card"><div class="stat-number">${rejected?.length || 0}</div><div class="stat-label">Rejected & Returned</div></div>
                 <div class="stat-card"><div class="stat-number">${selectedIds.length}</div><div class="stat-label">Selected Sources</div></div>
             `;
         }
@@ -295,15 +359,27 @@
             await updateStats();
             
             document.getElementById('submitBtn').onclick = saveSynthesis;
+            document.getElementById('rejectSelectedBtn').onclick = () => {
+                const reasonArea = document.getElementById('rejectionReasonArea');
+                if (reasonArea.style.display === 'none') {
+                    reasonArea.style.display = 'block';
+                    addLog('Enter rejection reason and click Reject again to confirm.', 'info');
+                } else {
+                    rejectSelected();
+                    reasonArea.style.display = 'none';
+                }
+            };
             document.getElementById('clearBtn').onclick = () => {
                 document.getElementById('synthesisInput').value = '';
                 updateWordCount();
                 clearSelection();
+                document.getElementById('rejectionReasonArea').style.display = 'none';
+                document.getElementById('rejectionReason').value = '';
             };
             document.getElementById('synthesisInput').oninput = updateWordCount;
             initRatingStars();
             
-            addLog('🧠 Mnemosyne ready. Select sources, write 16-32 word synthesis, save.');
+            addLog('🧠 Mnemosyne ready. Accept constructs → synthesize (16-32 words). Reject → back to Hephaestus.', 'success');
         }
         
         init();
