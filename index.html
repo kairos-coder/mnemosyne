@@ -50,7 +50,7 @@
         .star.active { color: #d4af37; }
         .star:hover { color: #d4af37; }
         
-        .action-bar { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+        .action-bar { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
         .rejection-reason { margin-top: 0.5rem; display: none; }
         .rejection-reason input { background: #060810; border: 1px solid #1e2535; border-radius: 0.5rem; padding: 0.5rem; color: #d4e0ed; width: 100%; margin-top: 0.5rem; }
     </style>
@@ -117,7 +117,6 @@
         let selectedIds = [];
         let selectedItems = [];
         let confidence = 3;
-        let showRejectionReason = false;
         
         // ============================================
         // DATABASE FUNCTIONS
@@ -222,24 +221,42 @@
                     .update({ status: 'rejected' })
                     .eq('construct_id', item.construct_id);
                 
-                // Optional: Also mark in concepts for tracking
+                // Get current metadata from the item (it's in the queue item, not the concept)
+                // We need to fetch the concept to get its current metadata
+                const { data: concept } = await supabase
+                    .from('concepts')
+                    .select('metadata')
+                    .eq('id', item.construct_id)
+                    .single();
+                
+                const currentMetadata = concept?.metadata || {};
+                const updatedMetadata = {
+                    ...currentMetadata,
+                    human_rejected: true,
+                    rejection_reason: reason,
+                    rejected_at: new Date().toISOString()
+                };
+                
+                // Update concept with rejection flag and penalize score
                 await supabase
                     .from('concepts')
                     .update({ 
-                        metadata: supabase.raw(`jsonb_set(metadata, '{human_rejected}', 'true')`),
-                        score: Math.max(0, (item.demeter_score || 50) - 15)  // Penalize score
+                        metadata: updatedMetadata,
+                        score: Math.max(0, (item.demeter_score || 50) - 15)
                     })
                     .eq('id', item.construct_id);
             }
             
             addLog(`❌ Rejected ${selectedIds.length} construct(s). Reason: "${reason}" — sent back to Hephaestus pool.`, 'reject');
             
-            // Clear rejection reason field
+            // Clear rejection reason field and hide area
             document.getElementById('rejectionReason').value = '';
+            document.getElementById('rejectionReasonArea').style.display = 'none';
             
             // Clear workspace
             clearSelection();
             await loadQueue();
+            await updateStats();
         }
         
         // ============================================
@@ -301,7 +318,6 @@
             selectedItems = [];
             updateSelectedDisplay();
             renderQueue();
-            document.getElementById('rejectionReasonArea').style.display = 'none';
         }
         
         function updateWordCount() {
@@ -366,7 +382,6 @@
                     addLog('Enter rejection reason and click Reject again to confirm.', 'info');
                 } else {
                     rejectSelected();
-                    reasonArea.style.display = 'none';
                 }
             };
             document.getElementById('clearBtn').onclick = () => {
